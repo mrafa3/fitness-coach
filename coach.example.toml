@@ -1,0 +1,32 @@
+# What the coach needs to know that the data can't tell it.
+# This is the example that ships with the code. setup.sh copies it to coach.toml, which is
+# yours to edit and stays on your Mac (it's in .gitignore, so it never goes to GitHub).
+
+[schedule]
+weekday_time         = "06:00"     # weekday mornings
+weekend_time         = "10:00"     # Sat and Sun
+weekday_sessions_target = 3        # aim for this many weekday mornings
+weekday_sessions_max    = 4        # never schedule more than this
+weekday_max_minutes     = 45
+weekend_days         = ["Sat", "Sun"]
+timezone             = "America/New_York"   # yours, e.g. America/Chicago
+# Rule: never three hard days in a row. The third straight day is recovery:
+# stretching, yoga, or a light jog (often two of those together).
+
+[equipment]
+run      = "treadmill (sends runs to Apple Health); outdoor routes nearby"
+strength = "dumbbells and resistance bands. Usually follows a Nike Training Club workout picked to match the prescribed focus and length."
+
+[athlete]
+current_lifting = "Progress by completion: reps, sets, minutes and harder variations before heavier weights."
+injuries        = "none"
+notes           = ""
+
+[guardrails]
+max_weekly_mileage_increase = 0.10   # vs the larger of last week and the 3-week average
+max_long_run_increase_mi    = 1.0    # vs longest run in the last 3 weeks
+starting_weekly_miles       = 6.0    # used until there's 3 weeks of history
+starting_long_run_mi        = 2.5
+
+[google]
+calendar_name = "Training"   # the calendar created in your Google account (shows up in Notion Calendar)

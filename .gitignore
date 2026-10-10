@@ -1,0 +1,23 @@
+# Allowlist: ignore everything, then allow only the kinds of files the code is made of.
+# Anything else (your settings, data, exports, reports, keys, backups, copies, notes,
+# a CLAUDE.md) stays out, whatever it's named. Docs, vendor files and markdown are listed by
+# exact name, so a report copied into docs/ can't end up on GitHub Pages. To add a new kind of file, add a "!" line here AND to ALLOWED in
+# check_public.py, which enforces the same list on every push.
+*
+!*/
+!.gitignore
+!*.py
+!/README.md
+!/coach_prompt.md
+!/setup.sh
+!*.example.toml
+!schema.sql
+!LICENSE
+!docs/index.html
+!docs/privacy.html
+!vendor/chart.umd.js
+!vendor/chartjs-adapter-date-fns.bundle.min.js
+
+# never, even though they contain .py/.md files
+.venv/
+__pycache__/

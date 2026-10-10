@@ -1,0 +1,23 @@
+# Example goals. setup.sh copies this to goals.toml, which is yours to edit and stays on
+# your Mac (it's in .gitignore, so your targets never go to GitHub).
+# Each goal draws a straight plan line from (start_date, start_value) to (target_date, target).
+# Leave start_value out and it is taken from your data on or just after start_date.
+# The target is target_value, or start + target_change if you'd rather set a gain.
+
+[[goal]]
+name          = "Lean mass"
+metric        = "lean_mass_lb"       # 14-day rolling average of Eufy lean body mass (via Apple Health)
+start_date    = "2026-01-05"
+target_change = 3.0                  # example gain; set your own after 2-3 weeks of readings
+target_date   = "2026-12-31"
+unit          = "lb"
+direction     = "up"
+
+[[goal]]
+name         = "6 miles in 60 minutes"
+metric       = "projected_6mi_min"  # Riegel projection from each run, weekly best
+start_date   = "2026-01-05"
+target_value = 60.0
+target_date  = "2026-12-31"
+unit         = "min"
+direction    = "down"
