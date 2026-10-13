@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS weigh_ins (
 );
 
 CREATE TABLE IF NOT EXISTS activities (
-    id              TEXT PRIMARY KEY,     -- Apple Health workout id from Health Auto Export
+    id              TEXT PRIMARY KEY,     -- db.workout_id(type, start, app): stable across re-sends
     started_at      TEXT NOT NULL,        -- local wall-clock time, ISO
     sport_type      TEXT NOT NULL,        -- Apple Health workout type, e.g. "Running", "High Intensity Interval Training"
     kind            TEXT NOT NULL,        -- run | strength | recovery | other (metrics.classify)

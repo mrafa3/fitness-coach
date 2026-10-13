@@ -8,12 +8,12 @@ Expected shape (https://help.healthyapps.dev/en/health-auto-export/export-format
 Everything here is untrusted input: unknown metrics are ignored, every number is
 range-checked, and bad entries are skipped and counted rather than stored.
 """
-import hashlib
 import json
 import math
 import re
 from datetime import datetime
 
+from db import start_key, workout_id
 from metrics import classify
 
 DATE_FORMATS = ("%Y-%m-%d %H:%M:%S %z", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d")
@@ -51,11 +51,17 @@ def _finite(v, lo: float, hi: float) -> float | None:
 
 def _when(s) -> datetime | None:
     """Local wall-clock time as recorded (the offset is the phone's at that moment)."""
+    t = _instant(s)
+    return t.replace(tzinfo=None) if t else None
+
+
+def _instant(s) -> datetime | None:
+    """The time as parsed, keeping its UTC offset when the sender included one."""
     if not isinstance(s, str):
         return None
     for fmt in DATE_FORMATS:
         try:
-            return datetime.strptime(s.strip(), fmt).replace(tzinfo=None)
+            return datetime.strptime(s.strip(), fmt)
         except ValueError:
             continue
     return None
@@ -143,8 +149,10 @@ def ingest(conn, payload) -> dict:
         src = w.get("source")
         src = src.get("name") if isinstance(src, dict) else src
         src = src.strip()[:60] if isinstance(src, str) else None
-        wid = w.get("id") if isinstance(w.get("id"), str) and 0 < len(w["id"]) <= 100 else \
-            hashlib.sha1(f"{name}|{start.isoformat()}".encode()).hexdigest()
+        # Health Auto Export gives the same workout a new "id" on every send, so a workout is
+        # identified by its type, its start as a UTC instant (so a phone in another time zone
+        # doesn't make it look new) and the recording app
+        wid = workout_id(name, start_key(start, _instant(w.get("start"))), src)
         conn.execute(
             """INSERT INTO activities (id, started_at, sport_type, kind, distance_m, moving_time_s,
                                        elapsed_time_s, source, avg_speed_mph, trainer, energy_kcal, updated_at)

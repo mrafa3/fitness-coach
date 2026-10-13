@@ -109,7 +109,7 @@ From then on the Sunday job keeps it current. If that fails you get a Mac notifi
 
 ## Putting this on GitHub
 
-Everything private lives in `~/.fitness-coach`, outside this folder: your data, the report, the keys, the Google sign-in and the logs. Inside the folder, `.gitignore` is an allowlist: git ignores everything except the code (`*.py`, `*.sh`, `*.example.toml`, `schema.sql`) and a short list of named docs and vendor files. So your settings (`coach.toml`, `goals.toml`), the files setup makes, and any stray export, report, backup, copy or notes file stay out whatever they're named. To add a new kind of file, add it to both `.gitignore` and `ALLOWED` in `check_public.py`.
+Everything private lives in `~/.fitness-coach`, outside this folder: your data, the report, the keys, the Google sign-in and the logs. Inside the folder, `.gitignore` is an allowlist: git ignores everything except the code (`*.py`, `setup.sh`, `*.example.toml`, `schema.sql`) and a short list of named docs and vendor files. So your settings (`coach.toml`, `goals.toml`), the files setup makes, and any stray export, report, backup, copy or notes file stay out whatever they're named. To add a new kind of file, add it to both `.gitignore` and `ALLOWED` in `check_public.py`.
 
 `check_public.py` enforces the same allowlist before every push, and also refuses anything that looks like a key, a token, Health data, a database, a path from your Mac, one of your actual keys, or a commit with your real email, in files and in commit messages. It checks every commit GitHub doesn't have yet, so something committed and then deleted is still caught. `git push --no-verify` skips it, so don't use that here.
 
@@ -141,4 +141,5 @@ Commit times include your time-zone offset. That's normal for git and can't be h
 - Lean mass includes water and bone, so it's larger than the scale's muscle-mass number, but it moves with it. Revisit `target_change` after a few weeks of readings.
 - The run projection is optimistic while your longest run is well short of 6 miles, so the report shows the longest run each week next to it.
 - Logs: `~/.fitness-coach/receiver.log`, `weekly.log`, and `launchd.log` (startup errors).
+- `~/.fitness-coach/workout.db.before-dedupe` is a one-time backup from when duplicate workouts were cleaned up. It's a full copy of your data; delete it once the report looks right. After updating the code, run `bash setup.sh` (or restart the receiver) right away, so the old importer stops adding copies.
 - After editing the code, restart the receiver: `launchctl kickstart -k gui/$(id -u)/com.fitness-coach.receiver`.

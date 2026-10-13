@@ -40,6 +40,11 @@ __SECTIONS__
 const DATA = __DATA__;
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 Chart.defaults.color = css('--muted'); Chart.defaults.font.family = 'system-ui, sans-serif';
+// Each point can carry its own tooltip text (tip) and heading (when); plan points don't.
+const day = s => new Date(s.length > 10 ? s : s + 'T12:00:00');
+const fmtDay = s => day(s).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+const fmtTime = s => day(s).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+const pace = p => { const m = Math.floor(p), s = Math.round((p - m) * 60); return m + ':' + String(s).padStart(2, '0'); };
 function chart(id, series, yTitle) {
   new Chart(document.getElementById(id), {
     type: 'line',
@@ -47,10 +52,19 @@ function chart(id, series, yTitle) {
     options: { responsive: true, interaction: { mode: 'nearest', intersect: false },
       scales: { x: { type: 'time', time: { unit: 'month' }, grid: { display: false }, ticks: { maxTicksLimit: 6 } },
                 y: { title: { display: true, text: yTitle } } },
-      plugins: { legend: { labels: { boxWidth: 12 } } } }
+      plugins: { legend: { labels: { boxWidth: 12 } },
+        tooltip: { callbacks: {
+          title: items => items.length && items[0].raw.when ? items[0].raw.when : '',
+          label: c => c.raw.tip || (c.dataset.label + ': ' + c.formattedValue) } } } }
   });
 }
 const pts = (arr, k) => arr.map(r => ({ x: r.day || r.week, y: r[k] }));
+const runPts = arr => arr.map(r => ({ x: r.at || r.day, y: r.projected,
+  when: fmtDay(r.at || r.day) + (r.at ? ', ' + fmtTime(r.at) : ''),
+  tip: r.miles + ' mi at ' + pace(r.pace_min_mi) + '/mi' + (r.mph ? ' (' + r.mph + ' mph)' : '') +
+       ' → 6 mi in ' + r.projected + ' min' }));
+const weekPts = arr => arr.map(w => ({ x: w.week, y: w.best_projected, when: 'Week of ' + fmtDay(w.week),
+  tip: 'Best projection ' + w.best_projected + ' min · ' + w.miles + ' mi total, longest ' + w.longest_mi + ' mi' }));
 const plan = p => p.start ? [{ x: p.start[0], y: p.start[1] }, { x: p.end[0], y: p.end[1] }] : [];
 if (DATA.muscle) chart('muscle', [
   { label: '14-day average', data: pts(DATA.muscle.series, 'avg'), borderColor: css('--line'), borderWidth: 2.5, pointRadius: 0, tension: .25 },
@@ -58,8 +72,8 @@ if (DATA.muscle) chart('muscle', [
   { label: 'plan', data: plan(DATA.muscle.plan), borderColor: css('--plan'), borderDash: [6, 5], pointRadius: 0 },
 ], 'lb');
 if (DATA.run) chart('run', [
-  { label: 'weekly best projection', data: pts(DATA.run.weekly, 'best_projected'), borderColor: css('--line'), borderWidth: 2.5, pointRadius: 3, tension: .2 },
-  { label: 'each run', data: pts(DATA.run.runs, 'projected'), borderColor: css('--dot'), pointRadius: 2, showLine: false },
+  { label: 'weekly best projection', data: weekPts(DATA.run.weekly), borderColor: css('--line'), borderWidth: 2.5, pointRadius: 3, tension: .2 },
+  { label: 'each run', data: runPts(DATA.run.runs), borderColor: css('--dot'), pointRadius: 2, showLine: false },
   { label: 'plan', data: plan(DATA.run.plan), borderColor: css('--plan'), borderDash: [6, 5], pointRadius: 0 },
 ], 'projected 6-mile time (min)');
 </script></body></html>"""

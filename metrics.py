@@ -83,6 +83,7 @@ def run_series(conn) -> list[dict]:
     ).fetchall()
     return [{
         "day": r["started_at"][:10],
+        "at": r["started_at"],                 # local start time, for the chart
         "miles": round(r["distance_m"] / METERS_PER_MILE, 2),
         "pace_min_mi": round(r["moving_time_s"] / 60 / (r["distance_m"] / METERS_PER_MILE), 2),
         "mph": r["avg_speed_mph"],

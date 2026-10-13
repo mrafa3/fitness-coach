@@ -27,7 +27,7 @@ MAX_BYTES = 2 * 1024 * 1024
 ZERO = "0" * 40
 
 # Keep in step with the "!" lines in .gitignore.
-ALLOWED = [".gitignore", "*.py", "README.md", "coach_prompt.md", "*.sh", "*.example.toml", "schema.sql",
+ALLOWED = [".gitignore", "*.py", "README.md", "coach_prompt.md", "setup.sh", "*.example.toml", "schema.sql",
            "LICENSE", "docs/index.html", "docs/privacy.html", "vendor/chart.umd.js",
            "vendor/chartjs-adapter-date-fns.bundle.min.js"]
 BAD_NAMES = ["coach.toml", "goals.toml", "run.sh", ".claude_path", "*.db", "*.sqlite*", "*.log",
