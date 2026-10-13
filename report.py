@@ -45,16 +45,17 @@ const day = s => new Date(s.length > 10 ? s : s + 'T12:00:00');
 const fmtDay = s => day(s).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 const fmtTime = s => day(s).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 const pace = p => { const m = Math.floor(p), s = Math.round((p - m) * 60); return m + ':' + String(s).padStart(2, '0'); };
-function chart(id, series, yTitle) {
+function chart(id, series, yTitle, axis) {
   new Chart(document.getElementById(id), {
     type: 'line',
     data: { datasets: series },
     options: { responsive: true, interaction: { mode: 'nearest', intersect: false },
-      scales: { x: { type: 'time', time: { unit: 'month' }, grid: { display: false }, ticks: { maxTicksLimit: 6 } },
-                y: { title: { display: true, text: yTitle } } },
+      scales: { x: { type: 'time', time: { minUnit: 'day' }, grid: { display: false }, ticks: { maxTicksLimit: 6 } },
+                y: { min: axis && axis[0] != null ? axis[0] : undefined, max: axis && axis[1] != null ? axis[1] : undefined,
+                     title: { display: true, text: yTitle } } },
       plugins: { legend: { labels: { boxWidth: 12 } },
         tooltip: { callbacks: {
-          title: items => items.length && items[0].raw.when ? items[0].raw.when : '',
+          title: items => !items.length ? '' : (items[0].raw.when || fmtDay(String(items[0].raw.x))),
           label: c => c.raw.tip || (c.dataset.label + ': ' + c.formattedValue) } } } }
   });
 }
@@ -67,23 +68,40 @@ const weekPts = arr => arr.map(w => ({ x: w.week, y: w.best_projected, when: 'We
   tip: 'Best projection ' + w.best_projected + ' min · ' + w.miles + ' mi total, longest ' + w.longest_mi + ' mi' }));
 const plan = p => p.start ? [{ x: p.start[0], y: p.start[1] }, { x: p.end[0], y: p.end[1] }] : [];
 if (DATA.muscle) chart('muscle', [
-  { label: '14-day average', data: pts(DATA.muscle.series, 'avg'), borderColor: css('--line'), borderWidth: 2.5, pointRadius: 0, tension: .25 },
+  { label: '14-day average', data: pts(DATA.muscle.series, 'avg'), borderColor: css('--line'), borderWidth: 2.5, pointRadius: 0, tension: 0 },
   { label: 'daily reading', data: pts(DATA.muscle.series, 'reading'), borderColor: css('--dot'), borderWidth: 1, pointRadius: 2, showLine: false },
   { label: 'plan', data: plan(DATA.muscle.plan), borderColor: css('--plan'), borderDash: [6, 5], pointRadius: 0 },
-], 'lb');
+], 'lb', DATA.muscle.axis);
 if (DATA.run) chart('run', [
-  { label: 'weekly best projection', data: weekPts(DATA.run.weekly), borderColor: css('--line'), borderWidth: 2.5, pointRadius: 3, tension: .2 },
+  { label: 'weekly best projection', data: weekPts(DATA.run.weekly), borderColor: css('--line'), borderWidth: 2.5, pointRadius: 3, tension: 0 },
   { label: 'each run', data: runPts(DATA.run.runs), borderColor: css('--dot'), pointRadius: 2, showLine: false },
   { label: 'plan', data: plan(DATA.run.plan), borderColor: css('--plan'), borderDash: [6, 5], pointRadius: 0 },
-], 'projected 6-mile time (min)');
+], 'projected 6-mile time (min)', DATA.run.axis);
 </script></body></html>"""
 
 
-def _section(sid: str, goal: dict, p: dict, extra: str = "") -> str:
+def _axis(goal: dict, values: list, p: dict) -> list:
+    """Y-axis range: chart_min/chart_max from goals.toml if set; otherwise the data and the
+    target with 5 units of room, on multiples of 5, so normal day-to-day noise looks small."""
+    import math
+    lo, hi = goal.get("chart_min"), goal.get("chart_max")
+    ok = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+    if ok(lo) and ok(hi) and lo < hi:
+        return [lo, hi]
+    pts = [v for v in values if isinstance(v, (int, float))]
+    target = (p.get("end") or [None, goal.get("target_value")])[1]
+    if isinstance(target, (int, float)):
+        pts.append(target)
+    if not pts:
+        return [None, None]
+    return [5 * math.floor((min(pts) - 5) / 5), 5 * math.ceil((max(pts) + 5) / 5)]
+
+
+def _section(sid: str, goal: dict, p: dict, extra: str = "", waiting: str = "No data yet") -> str:
     goal = {k: html.escape(str(v)) for k, v in goal.items()}
     s = p.get("status")
     if not s:
-        head = '<span class="gap">No data yet</span>'
+        head = f'<span class="gap">{html.escape(waiting)}</span>'
     else:
         cls = "ahead" if s["ahead"] or s["gap"] == 0 else "behind"
         where = "on plan" if s["gap"] == 0 else \
@@ -154,19 +172,23 @@ def build(quiet: bool = False) -> Path:
         ls = lean_series(conn)
         # wait for a week of readings before trusting the average enough to anchor the plan
         p = plan_line(g, [(r["day"], r["avg"]) for r in ls if r["n"] >= 7])
-        data["muscle"] = {"series": ls, "plan": p}
+        data["muscle"] = {"series": ls, "plan": p,
+                          "axis": _axis(g, [r["reading"] for r in ls] + [r["avg"] for r in ls], p)}
         extra = ""
         if ls:
             last = ls[-1]
             if last["weight"]:
                 extra = f'<p class="gap">Weight {last["weight"]} lb · lean mass {last["lean_pct"]}% of body weight</p>'
-        sections.append(_section("muscle", g, p, extra))
+        waiting = (f"Plan line starts after 7 readings in 14 days ({ls[-1]['n']} so far)" if ls
+                   else "No readings yet")
+        sections.append(_section("muscle", g, p, extra, waiting))
 
     if g := goals.get("projected_6mi_min"):
         runs = run_series(conn)
         weekly = weekly_runs(runs)
         p = plan_line(g, [(w["week"], w["best_projected"]) for w in weekly])
-        data["run"] = {"runs": runs, "weekly": weekly, "plan": p}
+        data["run"] = {"runs": runs, "weekly": weekly, "plan": p,
+                       "axis": _axis(g, [r["projected"] for r in runs], p)}
         extra = ""
         if weekly:
             w = weekly[-1]
@@ -175,7 +197,7 @@ def build(quiet: bool = False) -> Path:
             speed = f' · {last["mph"]} mph' if last.get("mph") else ""
             extra = (f'<p class="gap">This week: {w["miles"]} mi total, longest run {w["longest_mi"]} mi<br>'
                      f'Last run: {last["miles"]} mi at {m}:{sec:02d}/mi{speed}</p>')
-        sections.append(_section("run", g, p, extra))
+        sections.append(_section("run", g, p, extra, "No runs of a mile or more yet"))
 
     data["activity"] = weekly_activity(conn)
     from datetime import datetime

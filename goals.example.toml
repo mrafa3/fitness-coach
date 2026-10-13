@@ -12,6 +12,8 @@ target_change = 3.0                  # example gain; set your own after 2-3 week
 target_date   = "2026-12-31"
 unit          = "lb"
 direction     = "up"
+# chart_min   = 115                  # optional fixed y-axis range for the report chart
+# chart_max   = 140
 
 [[goal]]
 name         = "6 miles in 60 minutes"
