@@ -26,7 +26,7 @@ PAGE = """<!doctype html>
   .head { display:flex; justify-content:space-between; align-items:baseline; gap:12px; flex-wrap:wrap; }
   .big { font-size:28px; font-weight:700; } .gap { font-size:14px; color:var(--muted); }
   .ahead { color:var(--line); } .behind { color:var(--plan); }
-  canvas { margin-top:12px; }
+  .chart { position:relative; width:100%; height:260px; margin-top:12px; }  /* Chart.js fills this box */
   .focus { margin:10px 0 14px; } .notes { font-size:13px; color:var(--plan); }
   .sess { display:grid; grid-template-columns:22px 54px 1fr; gap:4px 8px; padding:8px 0; border-top:1px solid color-mix(in srgb, var(--muted) 25%, transparent); }
   .sess .d { color:var(--muted); font-size:13px; } .sess .det { grid-column:3; font-size:13px; color:var(--muted); }
@@ -46,11 +46,20 @@ const fmtDay = s => day(s).toLocaleDateString(undefined, { weekday: 'short', mon
 const fmtTime = s => day(s).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 const pace = p => { const m = Math.floor(p), s = Math.round((p - m) * 60); return m + ':' + String(s).padStart(2, '0'); };
 function chart(id, series, yTitle, axis) {
+  // show your data plus a short look-ahead of the plan line (2 weeks, or a quarter of your
+  // history, up to 8 weeks), so recent points aren't squeezed against the edge by a target
+  // date months away; the header states the full target
+  const DAY = 864e5;
+  const xs = series.filter(s => s.label !== 'plan').flatMap(s => s.data.map(p => +day(String(p.x))));
+  const lo = Math.min(...xs), hi = Math.max(...xs);
+  const ahead = Math.min(56 * DAY, Math.max(14 * DAY, (hi - lo) / 4));
+  const xmin = xs.length ? lo - DAY : undefined;
+  const xmax = xs.length ? hi + ahead : undefined;
   new Chart(document.getElementById(id), {
     type: 'line',
     data: { datasets: series },
-    options: { responsive: true, interaction: { mode: 'nearest', intersect: false },
-      scales: { x: { type: 'time', time: { minUnit: 'day' }, grid: { display: false }, ticks: { maxTicksLimit: 6 } },
+    options: { responsive: true, maintainAspectRatio: false, interaction: { mode: 'nearest', intersect: false },
+      scales: { x: { type: 'time', min: xmin, max: xmax, time: { minUnit: 'day' }, grid: { display: false }, ticks: { maxTicksLimit: innerWidth < 500 ? 4 : 6, maxRotation: 0 } },
                 y: { min: axis && axis[0] != null ? axis[0] : undefined, max: axis && axis[1] != null ? axis[1] : undefined,
                      title: { display: true, text: yTitle } } },
       plugins: { legend: { labels: { boxWidth: 12 } },
@@ -110,7 +119,7 @@ def _section(sid: str, goal: dict, p: dict, extra: str = "", waiting: str = "No 
                 f'<span class="gap"><span class="{cls}">{where}</span>'
                 f' · target {p["end"][1]} by {goal["target_date"]}</span>')
     return (f'<section><div class="head"><strong>{goal["name"]}</strong>{head}</div>'
-            f'{extra}<canvas id="{sid}" height="140"></canvas></section>')
+            f'{extra}<div class="chart"><canvas id="{sid}"></canvas></div></section>')
 
 
 def _plan_section(conn) -> str:

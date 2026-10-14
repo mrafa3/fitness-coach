@@ -113,8 +113,10 @@ def _matches(kind: str, a: dict) -> bool:
         return "miles" in a
     if kind == "strength":
         return a["kind"] == "strength"
-    # recovery: stretching/yoga/walk, or a light jog (short only)
-    return a["kind"] == "recovery" or (a["kind"] == "run" and a["minutes"] <= 30)
+    # recovery: stretching/yoga/walk, a light jog (short only), or a Nike Training Club
+    # mobility session, which NTC saves to Apple Health as "Cross Training"
+    ntc_mobility = a["type"] == "Cross Training" and (a["source"] or "").startswith("Nike")
+    return a["kind"] == "recovery" or ntc_mobility or (a["kind"] == "run" and a["minutes"] <= 30)
 
 
 def recent_hard_days(conn, week_start: date) -> list[str]:

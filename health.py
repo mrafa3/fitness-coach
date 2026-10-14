@@ -96,7 +96,7 @@ def _metric_value(col: str, qty, units) -> float | None:
 def ingest(conn, payload) -> dict:
     """Upsert one Health Auto Export payload. Returns counts; never raises on bad entries."""
     now = datetime.now().isoformat(timespec="seconds")
-    counts = {"weigh_in_values": 0, "workouts": 0, "skipped": 0, "ignored_metrics": 0}
+    counts = {"weigh_in_values": 0, "workouts": 0, "skipped": 0, "ignored_metrics": 0, "excluded": 0}
     data = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(data, dict):
         raise ValueError("Not a Health Auto Export payload (no 'data' object)")
@@ -153,6 +153,9 @@ def ingest(conn, payload) -> dict:
         # identified by its type, its start as a UTC instant (so a phone in another time zone
         # doesn't make it look new) and the recording app
         wid = workout_id(name, start_key(start, _instant(w.get("start"))), src)
+        if conn.execute("SELECT 1 FROM excluded_workouts WHERE id=?", (wid,)).fetchone():
+            counts["excluded"] += 1  # you marked this one as not yours (exclude.py)
+            continue
         conn.execute(
             """INSERT INTO activities (id, started_at, sport_type, kind, distance_m, moving_time_s,
                                        elapsed_time_s, source, avg_speed_mph, trainer, energy_kcal, updated_at)
@@ -166,6 +169,8 @@ def ingest(conn, payload) -> dict:
              int(duration), elapsed, src, speed if classify(name) == "run" else None, int(indoor), energy, now))
         counts["workouts"] += 1
 
+    # also catches a send that raced an exclusion made at the same moment
+    conn.execute("DELETE FROM activities WHERE id IN (SELECT id FROM excluded_workouts)")
     if counts["weigh_in_values"] or counts["workouts"]:  # an empty send isn't "data arrived"
         conn.execute("INSERT OR REPLACE INTO sync_state VALUES ('health', ?)", (now,))
     conn.commit()

@@ -46,6 +46,15 @@ CREATE TABLE IF NOT EXISTS coach_plans (
     raw_json        TEXT
 );
 
+-- workouts you've marked as not yours (exclude.py): removed, and skipped if sent again
+CREATE TABLE IF NOT EXISTS excluded_workouts (
+    id          TEXT PRIMARY KEY,         -- activities.id
+    started_at  TEXT,
+    sport_type  TEXT,
+    note        TEXT,
+    excluded_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS planned_sessions (
     week_start      TEXT NOT NULL REFERENCES coach_plans(week_start),
     day             TEXT NOT NULL,        -- ISO date

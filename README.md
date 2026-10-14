@@ -24,6 +24,7 @@ What the coach can see: workout type and length for everything, distance and pac
 | `receiver.py` | Listens for Health Auto Export on port 8765; checks the token and that the sender is on your network; rebuilds the report after each import |
 | `health.py` | Parses and range-checks the Health Auto Export JSON, then saves it |
 | `import_health.py` | Loads a Health Auto Export JSON file by hand (backfill) |
+| `exclude.py` | Marks a workout as not yours (someone else used your profile); it's removed and stays out |
 | `schema.sql`, `db.py` | The SQLite database in `~/.fitness-coach` (owner-only) |
 | `goals.toml` | Your goals: metric, target, dates. Created from `goals.example.toml`; stays on your Mac |
 | `metrics.py` | Workout classification, rolling averages, Riegel projections, plan lines |
@@ -63,6 +64,8 @@ Sends only land when the iPhone is unlocked, on the same Wi-Fi, and the Mac is a
 After data arrives, set your targets in `goals.toml` and run `./run.sh weekly` for your first plan.
 
 **The report on your phone:** setup prints a `http://<your-mac>.local:8765/report?key=…` address. Open it in Safari on your iPhone and bookmark it. It loads on home Wi-Fi while the Mac is awake, behind its own read-only key (`~/.fitness-coach/report_token`). The page can't load or send anything over the network.
+
+**Someone else's workout on your profile:** run `.venv/bin/python exclude.py`, pick it from the list, and confirm. It's removed and won't come back on later sends (`--excluded` lists them, `--restore` undoes one). Also delete it in the Health app so your Apple Health stats are right.
 
 **Backfill (optional):** Health Auto Export → Manual Export → JSON with the same data types → `.venv/bin/python import_health.py <file>`.
 
