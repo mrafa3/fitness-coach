@@ -31,6 +31,11 @@ PAGE = """<!doctype html>
   .sess { display:grid; grid-template-columns:22px 54px 1fr; gap:4px 8px; padding:8px 0; border-top:1px solid color-mix(in srgb, var(--muted) 25%, transparent); }
   .sess .d { color:var(--muted); font-size:13px; } .sess .det { grid-column:3; font-size:13px; color:var(--muted); }
   .chk { color:var(--line); font-weight:700; }
+  .tbl { overflow-x:auto; margin-top:8px; }
+  table { border-collapse:collapse; width:100%; font-size:13px; font-variant-numeric:tabular-nums; }
+  th, td { text-align:right; padding:7px 4px; white-space:nowrap; border-top:1px solid color-mix(in srgb, var(--muted) 25%, transparent); }
+  th { color:var(--muted); font-weight:500; font-size:11px; border-top:0; }
+  th:first-child, td:first-child { text-align:left; } .of { color:var(--muted); }
 </style></head><body><main>
 <h1>Fitness Coach</h1><p class="sub">Updated __UPDATED__</p>
 __FRESHNESS__
@@ -159,6 +164,38 @@ def _plan_section(conn) -> str:
             f'<p class="focus">{html.escape(plan["focus"] or "")}</p>{notes}{"".join(rows)}</section>')
 
 
+def _past_weeks(conn, limit: int = 12) -> str:
+    """One row per finished planned week, newest first: sessions done, run miles against the
+    plan, longest run, and strength and recovery sessions done."""
+    from datetime import date, timedelta
+    from coach import activities_between, adherence
+    this_monday = date.today() - timedelta(days=date.today().weekday())
+    weeks = conn.execute("SELECT week_start FROM coach_plans WHERE week_start < ? ORDER BY week_start DESC LIMIT ?",
+                         (this_monday.isoformat(), limit)).fetchall()
+    if not weeks:
+        return ""
+    rows = []
+    for w in weeks:
+        ws = date.fromisoformat(w["week_start"])
+        score = adherence(conn, ws) or {"sessions": [], "completed": "0/0"}
+        runs = [a for a in activities_between(conn, ws, ws + timedelta(days=6)) if "miles" in a]
+        planned_mi = conn.execute("SELECT COALESCE(SUM(distance_mi), 0) FROM planned_sessions "
+                                  "WHERE week_start=? AND kind='run'", (ws.isoformat(),)).fetchone()[0]
+        def kind(k):
+            s = [r for r in score["sessions"] if r["kind"] == k]
+            return f'{sum(r["done"] for r in s)}/{len(s)}' if s else "–"
+        miles = sum(a["miles"] for a in runs)
+        longest = max((a["miles"] for a in runs), default=0)
+        rows.append(f'<tr><td>{ws:%b %-d}</td><td>{score["completed"]}</td>'
+                    f'<td>{miles:.1f}<span class="of">/{planned_mi:.1f}</span></td>'
+                    f'<td>{f"{longest:.1f}" if longest else "–"}</td><td>{kind("strength")}</td>'
+                    f'<td>{kind("recovery")}</td></tr>')
+    return ('<section><div class="head"><strong>Past weeks</strong></div>'
+            '<div class="tbl"><table><thead><tr><th>Week</th><th>Done</th><th>Miles<span class="of">/plan</span></th>'
+            '<th>Longest</th><th>Strength</th><th>Recovery</th></tr></thead><tbody>'
+            + "".join(rows) + '</tbody></table></div></section>')
+
+
 def _freshness(conn) -> str:
     from datetime import datetime
     row = conn.execute("SELECT last_synced_at FROM sync_state WHERE source='health'").fetchone()
@@ -175,7 +212,7 @@ def _freshness(conn) -> str:
 def build(quiet: bool = False) -> Path:
     conn = connect()
     goals = {g["metric"]: g for g in load_goals()}
-    data, sections = {}, [_plan_section(conn)]
+    data, sections = {}, [_plan_section(conn), _past_weeks(conn)]
 
     if g := goals.get("lean_mass_lb"):
         ls = lean_series(conn)
