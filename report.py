@@ -127,15 +127,27 @@ def _section(sid: str, goal: dict, p: dict, extra: str = "", waiting: str = "No 
             f'{extra}<div class="chart"><canvas id="{sid}"></canvas></div></section>')
 
 
-def _plan_section(conn) -> str:
+def _shown_week(conn):
+    """The week the report's plan card shows: on Sunday, next week once its plan exists (after
+    the coach runs); otherwise this week. Weeks before it go in the Past weeks table. Only on
+    Sunday, so a manual mid-week plan run doesn't hide the current week's checkmarks."""
     from datetime import date, timedelta
-    from coach import adherence, upcoming_monday
-    this_monday = date.today() - timedelta(days=date.today().weekday())
-    for ws in (this_monday, upcoming_monday()):
-        plan = conn.execute("SELECT * FROM coach_plans WHERE week_start=?", (ws.isoformat(),)).fetchone()
-        if plan:
-            break
-    else:
+    from coach import upcoming_monday
+    today = date.today()
+    this_monday = today - timedelta(days=today.weekday())
+    order = (upcoming_monday(), this_monday) if today.weekday() == 6 else (this_monday,)
+    for ws in order:
+        if conn.execute("SELECT 1 FROM coach_plans WHERE week_start=?", (ws.isoformat(),)).fetchone():
+            return ws
+    return this_monday
+
+
+def _plan_section(conn) -> str:
+    from datetime import date
+    from coach import adherence
+    ws = _shown_week(conn)
+    plan = conn.execute("SELECT * FROM coach_plans WHERE week_start=?", (ws.isoformat(),)).fetchone()
+    if not plan:
         return ""
     score = adherence(conn, ws) or {"sessions": [], "completed": ""}
     sessions = conn.execute("SELECT * FROM planned_sessions WHERE week_start=? ORDER BY day, kind",
@@ -165,13 +177,13 @@ def _plan_section(conn) -> str:
 
 
 def _past_weeks(conn, limit: int = 12) -> str:
-    """One row per finished planned week, newest first: sessions done, run miles against the
+    """One row per planned week before the one on the plan card, newest first: sessions done, run miles against the
     plan, longest run, and strength and recovery sessions done."""
     from datetime import date, timedelta
     from coach import activities_between, adherence
-    this_monday = date.today() - timedelta(days=date.today().weekday())
+    shown = _shown_week(conn)
     weeks = conn.execute("SELECT week_start FROM coach_plans WHERE week_start < ? ORDER BY week_start DESC LIMIT ?",
-                         (this_monday.isoformat(), limit)).fetchall()
+                         (shown.isoformat(), limit)).fetchall()
     if not weeks:
         return ""
     rows = []
