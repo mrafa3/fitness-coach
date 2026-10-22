@@ -31,10 +31,14 @@ PAGE = """<!doctype html>
   .sess { display:grid; grid-template-columns:22px 54px 1fr; gap:4px 8px; padding:8px 0; border-top:1px solid color-mix(in srgb, var(--muted) 25%, transparent); }
   .sess .d { color:var(--muted); font-size:13px; } .sess .det { grid-column:3; font-size:13px; color:var(--muted); }
   .chk { color:var(--line); font-weight:700; }
+  .tag { display:inline-block; font-size:11px; line-height:1.6; padding:0 7px; border-radius:9px; color:var(--muted);
+         border:1px solid color-mix(in srgb, var(--muted) 45%, transparent); vertical-align:1px; }
+  .extra { border-top:0; padding-top:0; } .extra .chk { color:var(--plan); }
+  .extra .tag { color:var(--plan); border-color:color-mix(in srgb, var(--plan) 55%, transparent); }
   .tbl { overflow-x:auto; margin-top:8px; }
-  table { border-collapse:collapse; width:100%; font-size:13px; font-variant-numeric:tabular-nums; }
-  th, td { text-align:right; padding:7px 4px; white-space:nowrap; border-top:1px solid color-mix(in srgb, var(--muted) 25%, transparent); }
-  th { color:var(--muted); font-weight:500; font-size:11px; border-top:0; }
+  table { border-collapse:collapse; width:100%; font-size:12px; font-variant-numeric:tabular-nums; }
+  th, td { text-align:right; padding:7px 3px; white-space:nowrap; border-top:1px solid color-mix(in srgb, var(--muted) 25%, transparent); }
+  th { color:var(--muted); font-weight:500; font-size:10px; border-top:0; }
   th:first-child, td:first-child { text-align:left; } .of { color:var(--muted); }
 </style></head><body><main>
 <h1>Fitness Coach</h1><p class="sub">Updated __UPDATED__</p>
@@ -149,36 +153,65 @@ def _plan_section(conn) -> str:
     plan = conn.execute("SELECT * FROM coach_plans WHERE week_start=?", (ws.isoformat(),)).fetchone()
     if not plan:
         return ""
-    score = adherence(conn, ws) or {"sessions": [], "completed": ""}
+    from datetime import timedelta
+    score = adherence(conn, ws) or {"sessions": [], "completed": "", "extras": []}
     sessions = conn.execute("SELECT * FROM planned_sessions WHERE week_start=? ORDER BY day, kind",
                             (ws.isoformat(),)).fetchall()
-    done = {(r["day"], r["kind"]) for r in score["sessions"] if r["done"]}
+    result = {(r["day"], r["kind"]): r for r in score["sessions"]}
+    extras = score.get("extras", [])
     rows = []
-    for x in sessions:
-        d = date.fromisoformat(x["day"])
-        mark = "✓" if (x["day"], x["kind"]) in done else ""
-        meta = ""
-        if x["kind"] == "run" and x["distance_mi"]:
-            meta = f' · {x["distance_mi"]} mi'
-            if x["target_pace"]:
-                m, sec = divmod(round(x["target_pace"] * 60), 60)
-                meta += f" @ {m}:{sec:02d}/mi · {treadmill_mph(x['target_pace'])} mph"
-        elif x["minutes"]:
-            meta = f' · {x["minutes"]} min'
-            if x["kind"] == "strength":
-                meta += " · any matching NTC workout"
-        rows.append(f'<div class="sess"><span class="chk">{mark}</span><span class="d">{d:%a %-d}</span>'
-                    f'<span>{html.escape(x["title"] or "")}{meta}</span>'
-                    f'<span class="det">{html.escape(x["details"] or "")}</span></div>')
+    for i in range(7):  # every day of the week, planned or not
+        d = ws + timedelta(days=i)
+        todays = [x for x in sessions if x["day"] == d.isoformat()]
+        if not todays:
+            rows.append(f'<div class="sess"><span class="chk"></span><span class="d">{d:%a %-d}</span>'
+                        f'<span><span class="tag">No workout planned</span></span></div>')
+        for x in todays:
+            rows.append(_session_row(x, result.get((x["day"], x["kind"]))))
+        for a in (a for a in extras if a["day"] == d.isoformat()):
+            rows.append(f'<div class="sess extra"><span class="chk">+</span><span class="d"></span>'
+                        f'<span>{_extra_text(a)} <span class="tag">extra</span></span></div>')
+    n_extra = len(extras)
     notes = f'<p class="notes">{html.escape(plan["guardrail_notes"])}</p>' if plan["guardrail_notes"] else ""
+    tally = f'{score["completed"]} done' + (f' · +{n_extra} extra' if n_extra else "")
     return (f'<section><div class="head"><strong>Week of {ws:%b %-d}</strong>'
-            f'<span class="gap">{score["completed"]} done</span></div>'
+            f'<span class="gap">{tally}</span></div>'
             f'<p class="focus">{html.escape(plan["focus"] or "")}</p>{notes}{"".join(rows)}</section>')
+
+
+def _extra_text(a: dict) -> str:
+    """'Curling · 92 min' or 'Run · 3.1 mi · 31 min': a workout done beyond the plan."""
+    bits = [html.escape(str(a["type"]))]
+    if a.get("miles"):
+        bits.append(f'{a["miles"]:.1f} mi')
+    bits.append(f'{a["minutes"]} min')
+    return " · ".join(bits)
+
+
+def _session_row(x, r) -> str:
+    """One planned session, with a check if it was done (and which day, if a day early or late)."""
+    from datetime import date
+    d = date.fromisoformat(x["day"])
+    mark = "✓" if r and r["done"] else ""
+    when = f' <span class="tag">done {date.fromisoformat(r["done_on"]):%a}</span>' if r and r.get("done_on") else ""
+    meta = ""
+    if x["kind"] == "run" and x["distance_mi"]:
+        meta = f' · {x["distance_mi"]} mi'
+        if x["target_pace"]:
+            m, sec = divmod(round(x["target_pace"] * 60), 60)
+            meta += f" @ {m}:{sec:02d}/mi · {treadmill_mph(x['target_pace'])} mph"
+    elif x["minutes"]:
+        meta = f' · {x["minutes"]} min'
+        if x["kind"] == "strength":
+            meta += " · any matching NTC workout"
+    return (f'<div class="sess"><span class="chk">{mark}</span><span class="d">{d:%a %-d}</span>'
+            f'<span>{html.escape(x["title"] or "")}{meta}{when}</span>'
+            f'<span class="det">{html.escape(x["details"] or "")}</span></div>')
 
 
 def _past_weeks(conn, limit: int = 12) -> str:
     """One row per planned week before the one on the plan card, newest first: sessions done, run miles against the
-    plan, longest run, and strength and recovery sessions done."""
+    plan, longest run, strength and recovery sessions done, and workouts done beyond the plan."""
     from datetime import date, timedelta
     from coach import activities_between, adherence
     shown = _shown_week(conn)
@@ -189,7 +222,7 @@ def _past_weeks(conn, limit: int = 12) -> str:
     rows = []
     for w in weeks:
         ws = date.fromisoformat(w["week_start"])
-        score = adherence(conn, ws) or {"sessions": [], "completed": "0/0"}
+        score = adherence(conn, ws) or {"sessions": [], "completed": "0/0", "extras": []}
         runs = [a for a in activities_between(conn, ws, ws + timedelta(days=6)) if "miles" in a]
         planned_mi = conn.execute("SELECT COALESCE(SUM(distance_mi), 0) FROM planned_sessions "
                                   "WHERE week_start=? AND kind='run'", (ws.isoformat(),)).fetchone()[0]
@@ -201,10 +234,10 @@ def _past_weeks(conn, limit: int = 12) -> str:
         rows.append(f'<tr><td>{ws:%b %-d}</td><td>{score["completed"]}</td>'
                     f'<td>{miles:.1f}<span class="of">/{planned_mi:.1f}</span></td>'
                     f'<td>{f"{longest:.1f}" if longest else "–"}</td><td>{kind("strength")}</td>'
-                    f'<td>{kind("recovery")}</td></tr>')
+                    f'<td>{kind("recovery")}</td><td>{len(score.get("extras", [])) or "–"}</td></tr>')
     return ('<section><div class="head"><strong>Past weeks</strong></div>'
             '<div class="tbl"><table><thead><tr><th>Week</th><th>Done</th><th>Miles<span class="of">/plan</span></th>'
-            '<th>Longest</th><th>Strength</th><th>Recovery</th></tr></thead><tbody>'
+            '<th>Longest</th><th>Strength</th><th>Recovery</th><th>Extra</th></tr></thead><tbody>'
             + "".join(rows) + '</tbody></table></div></section>')
 
 

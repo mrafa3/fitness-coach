@@ -68,6 +68,13 @@ def upcoming_monday(today: date | None = None) -> date:
 
 # ---- what happened ---------------------------------------------------------
 
+def display_type(sport_type: str, source: str | None) -> str:
+    """The workout's name as shown on the report and to the coach. Apple Health's own type
+    names already read well ("Curling", "Functional Strength Training"), so this passes them
+    through; it's the one place to rename a type if an app ever sends an unhelpful one."""
+    return sport_type
+
+
 def activities_between(conn, start: date, end: date) -> list[dict]:
     rows = conn.execute(
         """SELECT * FROM activities WHERE substr(started_at,1,10) BETWEEN ? AND ?
@@ -77,7 +84,7 @@ def activities_between(conn, start: date, end: date) -> list[dict]:
     for r in rows:
         # runs: active time (pace math); strength/recovery: start-to-end, since NTC counts pauses out
         secs = r["moving_time_s"] if r["kind"] == "run" else (r["elapsed_time_s"] or r["moving_time_s"])
-        a = {"day": r["started_at"][:10], "type": r["sport_type"], "kind": r["kind"],
+        a = {"day": r["started_at"][:10], "type": display_type(r["sport_type"], r["source"]), "kind": r["kind"],
              "source": r["source"], "minutes": round((secs or 0) / 60)}
         if r["kind"] == "run" and r["distance_m"]:
             mi = r["distance_m"] / METERS_PER_MILE
@@ -100,7 +107,7 @@ def workout_history(conn, week_start: date, days: int = 120) -> list[dict]:
            GROUP BY sport_type, source ORDER BY times DESC, last_done DESC LIMIT 25""",
         ((week_start - timedelta(days=days)).isoformat(), week_start.isoformat(), MIN_WORKOUT_SECONDS),
     ).fetchall()
-    return [dict(r) for r in rows]
+    return [dict(r) | {"type": display_type(r["type"], r["source"])} for r in rows]
 
 
 def is_hard(session: dict) -> bool:
@@ -147,8 +154,8 @@ def adherence(conn, week_start: date) -> dict | None:
     # exact-day matches first for every session, then a day early or late; each workout counts once
     for offsets in ((0,), (-1, 1)):
         for i, p in enumerate(planned):
-            if i in matched:
-                continue
+            if i in matched or p["day"] > date.today().isoformat():
+                continue  # a session whose day hasn't come yet can't be done; an early workout shows as extra
             days = {(date.fromisoformat(p["day"]) + timedelta(days=k)).isoformat() for k in offsets}
             j = next((j for j, a in enumerate(done)
                       if j not in used and a["day"] in days and _matches(p["kind"], a)), None)
@@ -158,6 +165,8 @@ def adherence(conn, week_start: date) -> dict | None:
     for i, p in enumerate(planned):
         match = matched.get(i)
         r = {"day": p["day"], "kind": p["kind"], "title": p["title"], "done": bool(match)}
+        if match and match["day"] != p["day"]:
+            r["done_on"] = match["day"]  # credited from a workout a day early or late
         if match and p["kind"] in ("strength", "recovery") and p["minutes"]:
             r["planned_min"], r["actual_min"] = p["minutes"], match["minutes"]
             r["cut_short"] = match["minutes"] < 0.75 * p["minutes"]
@@ -169,7 +178,10 @@ def adherence(conn, week_start: date) -> dict | None:
                 r["planned_mph"], r["actual_mph"] = treadmill_mph(p["target_pace"]), match["mph"]
         results.append(r)
     n_done = sum(r["done"] for r in results)
-    return {"week_start": week_start.isoformat(), "completed": f"{n_done}/{len(results)}", "sessions": results}
+    # workouts that didn't count toward any planned session: done beyond the plan
+    extras = [a for j, a in enumerate(done) if j not in used]
+    return {"week_start": week_start.isoformat(), "completed": f"{n_done}/{len(results)}", "sessions": results,
+            "extras": extras}
 
 
 def signals(conn) -> list[str]:

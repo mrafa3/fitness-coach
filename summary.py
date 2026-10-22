@@ -47,7 +47,8 @@ def week_summary(conn, ws: date) -> dict | None:
         else:
             out.append(f"{gl['goal']}: not enough data yet")
     if last:
-        out.append(f"Last week: {last['completed']} sessions done.")
+        extra = len(last.get("extras", []))
+        out.append(f"Last week: {last['completed']} sessions done" + (f", plus {extra} extra." if extra else "."))
     if plan["guardrail_notes"]:
         out += ["", "Adjusted by the coach's limits: " + plan["guardrail_notes"]]
     out += [s for s in ctx["signals"] if "Apple Health" in s]
