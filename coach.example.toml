@@ -22,8 +22,15 @@ current_lifting = "Progress by completion: reps, sets, minutes and harder variat
 injuries        = "none"
 notes           = ""
 
+[running]
+runs_per_week      = 3
+long_run_goal_mi   = 6.0
+long_run_goal_date = "2027-03-01"   # reach this long run by this date
+long_run_step_mi   = 0.5            # added after two weeks in a row with every run done
+
 [guardrails]
-max_weekly_mileage_increase = 0.10   # vs the larger of last week and the 3-week average
+max_weekly_mileage_increase = 0.10   # vs your biggest week in the last 3
+min_weekly_increase_mi      = 1.0    # ...but always allow at least this much more
 max_long_run_increase_mi    = 1.0    # vs longest run in the last 3 weeks
 starting_weekly_miles       = 6.0    # used until there's 3 weeks of history
 starting_long_run_mi        = 2.5

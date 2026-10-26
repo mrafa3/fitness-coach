@@ -110,9 +110,17 @@ def workout_history(conn, week_start: date, days: int = 120) -> list[dict]:
     return [dict(r) | {"type": display_type(r["type"], r["source"])} for r in rows]
 
 
+EASY_RUN_HARD_MINUTES = 30   # an easy run longer than this counts as a hard day (same as recent_hard_days)
+
+
 def is_hard(session: dict) -> bool:
-    """Recovery sessions and recovery-pace jogs don't count toward the three-in-a-row rule."""
-    return session["kind"] != "recovery" and session.get("run_type") != "recovery"
+    """Recovery sessions, recovery jogs and short easy runs don't count toward the three-in-a-row rule."""
+    if session["kind"] == "recovery" or session.get("run_type") == "recovery":
+        return False
+    if session["kind"] == "run" and session.get("run_type") == "easy":
+        mi, pace = session.get("distance_mi"), session.get("target_pace_min_mi")
+        return not (mi and pace and mi * pace <= EASY_RUN_HARD_MINUTES)
+    return True
 
 
 def _matches(kind: str, a: dict) -> bool:
@@ -216,10 +224,115 @@ def limits(conn, profile: dict, week_start: date) -> dict:
     if len(weeks) < 3:
         base_miles, base_long = g["starting_weekly_miles"], g["starting_long_run_mi"]
     else:
-        base_miles = max(weeks[-1]["miles"], sum(w["miles"] for w in weeks) / 3)
+        # your biggest recent week, so one week with missed runs doesn't shrink the next plan
+        base_miles = max(w["miles"] for w in weeks)
         base_long = max(w["longest_mi"] for w in weeks)
-    return {"max_weekly_miles": round(base_miles * (1 + g["max_weekly_mileage_increase"]), 1),
+    # 10% (or whatever coach.toml says), but at least a mile: 10% of a 4-mile week is only 0.4 mi
+    floor = g.get("min_weekly_increase_mi", 1.0)
+    floor = floor if isinstance(floor, (int, float)) and not isinstance(floor, bool) and 0 <= floor <= 3 else 1.0
+    return {"max_weekly_miles": round(base_miles + max(base_miles * g["max_weekly_mileage_increase"], floor), 1),
             "max_long_run_mi": round(base_long + g["max_long_run_increase_mi"], 1)}
+
+
+RUNNING_DEFAULTS = {"runs_per_week": 3, "long_run_goal_mi": 6.0, "long_run_goal_date": "2027-03-01",
+                    "long_run_step_mi": 0.5}
+
+
+def running_settings(profile: dict) -> dict:
+    """[running] in coach.toml, with defaults for anything missing or invalid."""
+    r = dict(RUNNING_DEFAULTS)
+    given = profile.get("running") if isinstance(profile.get("running"), dict) else {}
+    for k, default in RUNNING_DEFAULTS.items():
+        v = given.get(k)
+        if k == "long_run_goal_date":
+            try:
+                r[k] = date.fromisoformat(str(v)).isoformat() if v is not None else default
+            except ValueError:
+                pass
+        elif isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v):
+            lo, hi = {"runs_per_week": (1, 6), "long_run_goal_mi": (1, 30), "long_run_step_mi": (0.1, 1.0)}[k]
+            if lo <= v <= hi:
+                r[k] = int(v) if k == "runs_per_week" else float(v)
+    return r
+
+
+def _runs_complete(adh: dict) -> bool | None:
+    """Were all of a week's planned runs done at (about) the planned distance? None if none were planned."""
+    runs = [s for s in adh["sessions"] if s["kind"] == "run"]
+    if not runs:
+        return None
+    if any(not s["done"] and s["day"] >= date.today().isoformat() for s in runs):
+        return None   # a run that's still due (or today's, not synced yet) isn't a miss
+    return all(s["done"] and s.get("distance_hit", True) for s in runs)
+
+
+def _planned_long(conn, week_start: date) -> float | None:
+    """That week's rung on the ladder (saved with the plan), or else its longest planned run."""
+    saved = conn.execute("SELECT raw_json FROM coach_plans WHERE week_start=?", (week_start.isoformat(),)).fetchone()
+    try:
+        v = json.loads(saved["raw_json"]).get("ladder_long_mi") if saved and saved["raw_json"] else None
+    except (ValueError, AttributeError):
+        v = None
+    if isinstance(v, (int, float)) and not isinstance(v, bool) and 0.5 <= v <= 30:
+        return float(v)
+    row = conn.execute("""SELECT COALESCE(MAX(CASE WHEN run_type='long' THEN distance_mi END), MAX(distance_mi)) AS mi
+                          FROM planned_sessions WHERE week_start=? AND kind='run'""",
+                       (week_start.isoformat(),)).fetchone()
+    return row["mi"] if row else None
+
+
+def progression(conn, profile: dict, week_start: date, lim: dict) -> dict:
+    """This week's long run, from a simple ladder: hold a distance until two weeks in a row have every
+    planned run done, then step up. Missing runs two weeks running steps back. Capped by the limits."""
+    r = running_settings(profile)
+    step, goal = r["long_run_step_mi"], r["long_run_goal_mi"]
+    weeks = []
+    for k in range(1, 5):   # the last four planned weeks, newest first, stopping at a gap
+        ws = week_start - timedelta(days=7 * k)
+        adh = adherence(conn, ws)
+        if adh is None:
+            break
+        weeks.append({"week_start": ws.isoformat(), "runs_complete": _runs_complete(adh),
+                      "planned_long_mi": _planned_long(conn, ws)})
+    consistent = 0
+    for w in weeks:
+        if w["runs_complete"] is not True:
+            break
+        consistent += 1
+    if not weeks or weeks[0]["planned_long_mi"] is None:
+        recent = [w["longest_mi"] for w in weekly_runs(run_series(conn)) if w["week"] < week_start.isoformat()][-3:]
+        suggested = round(max(recent), 1) if recent else lim["max_long_run_mi"] - 1.0
+        why = "No planned long run last week; starting from your longest recent run."
+    else:
+        last = weeks[0]["planned_long_mi"]
+        prev = weeks[1] if len(weeks) > 1 else None
+        held = prev is not None and prev["planned_long_mi"] is not None and abs(prev["planned_long_mi"] - last) < 0.05
+        if weeks[0]["runs_complete"] is None:
+            suggested, why = last, "Last week's runs can't be judged yet (still due, or none planned): hold."
+        elif weeks[0]["runs_complete"] and prev and prev["runs_complete"] and held:
+            suggested, why = last + step, f"Two weeks in a row with every run done at {last} mi: step up."
+        elif weeks[0]["runs_complete"]:
+            suggested, why = last, f"Last week's runs were all done; hold {last} mi a second week before stepping up."
+        elif prev and prev["runs_complete"] is False:
+            suggested, why = last - step, "Runs were missed two weeks running: step back."
+        else:
+            suggested, why = last, "Some runs were missed last week: hold."
+    capped = round(max(min(suggested, lim["max_long_run_mi"], goal), 1.0), 1)
+    if capped < round(suggested, 1) - 0.05:
+        why += f" Capped at {capped} mi by the weekly limits."
+    # three runs only if the weekly cap fits the long run plus easy runs of at least 1.5 mi each
+    runs = r["runs_per_week"]
+    while runs > 1 and capped + 1.5 * (runs - 1) > lim["max_weekly_miles"]:
+        runs -= 1
+    if runs < r["runs_per_week"]:
+        why += f" {runs} run{'s' if runs > 1 else ''} this week: the weekly cap ({lim['max_weekly_miles']} mi) can't fit {r['runs_per_week']}."
+    goal_day = date.fromisoformat(r["long_run_goal_date"])
+    weeks_left = max((goal_day - week_start).days // 7, 0)
+    weeks_needed = 2 * math.ceil(max(goal - capped, 0) / step)   # at one step every two weeks
+    return {"runs_per_week": runs, "long_run_mi": capped, "why": why,
+            "consistent_run_weeks": consistent, "quality_unlocked": consistent >= 3,
+            "long_run_goal": f"{goal} mi by {goal_day.isoformat()}", "weeks_to_long_run_goal": weeks_left,
+            "on_track_for_long_run_goal": weeks_needed <= weeks_left, "recent_weeks": weeks}
 
 
 def _streak_violations(sessions: list[dict], before: list[str]) -> list[str]:
@@ -227,6 +340,11 @@ def _streak_violations(sessions: list[dict], before: list[str]) -> list[str]:
     hard_days = {x["day"] for x in sessions if is_hard(x)}
     seq = [d in before for d in ("Sat", "Sun")] + [d in hard_days for d in DAYS]
     return [DAYS[i - 2] for i in range(2, len(seq)) if seq[i] and seq[i - 1] and seq[i - 2]]
+
+
+def _longest_allowed(lim: dict) -> float:
+    """No run may be longer than this week's long run on the ladder (or the long-run limit)."""
+    return min(lim["max_long_run_mi"], lim.get("long_run_mi") or lim["max_long_run_mi"])
 
 
 def check(plan: dict, lim: dict, profile: dict, before: list[str] = ()) -> list[str]:
@@ -245,12 +363,19 @@ def check(plan: dict, lim: dict, profile: dict, before: list[str] = ()) -> list[
         if x["kind"] != "run" and x["day"] not in s["weekend_days"] and (x.get("minutes") or 0) > s["weekday_max_minutes"]:
             problems.append(f"{x['day']} {x['kind']} is {x['minutes']} min; weekdays are capped at {s['weekday_max_minutes']}.")
     runs = [x for x in sessions if x["kind"] == "run"]
+    if lim.get("runs_per_week") and len(runs) < lim["runs_per_week"]:
+        problems.append(f"{len(runs)} runs planned; schedule {lim['runs_per_week']} (one long, the others easy "
+                        "unless quality is unlocked).")
     total = sum(x.get("distance_mi") or 0 for x in runs)
     if total > lim["max_weekly_miles"]:
         problems.append(f"Weekly run miles {total:.1f} exceed limit {lim['max_weekly_miles']}.")
+    longest = _longest_allowed(lim)
     for x in runs:
-        if (x.get("distance_mi") or 0) > lim["max_long_run_mi"]:
-            problems.append(f"{x['day']} run of {x['distance_mi']} mi exceeds long-run limit {lim['max_long_run_mi']}.")
+        if x.get("run_type") == "easy" and is_hard(x):
+            problems.append(f"{x['day']} easy run is over {EASY_RUN_HARD_MINUTES} minutes (or has no pace); keep easy "
+                            "runs at that or less and put extra distance in the long run.")
+        if (x.get("distance_mi") or 0) > longest:
+            problems.append(f"{x['day']} run of {x['distance_mi']} mi is longer than this week's long run ({longest} mi).")
         if x["day"] not in s["weekend_days"] and x.get("distance_mi") and x.get("target_pace_min_mi") \
                 and x["distance_mi"] * x["target_pace_min_mi"] > s["weekday_max_minutes"]:
             problems.append(f"{x['day']} run won't fit in {s['weekday_max_minutes']} minutes; put long runs on the weekend.")
@@ -272,10 +397,21 @@ def clamp(plan: dict, lim: dict, profile: dict, before: list[str] = ()) -> list[
             kept.append(x); seen.add(x["day"])
     if len(kept) < len(plan["sessions"]):
         notes.append("Kept one session per day.")
+    # easy runs back to 30 minutes first, so they stop counting as hard days before the streak fix
+    for x in kept:
+        pace = x.get("target_pace_min_mi")
+        if x["kind"] == "run" and x.get("run_type") == "easy" and pace and x.get("distance_mi") \
+                and x["distance_mi"] * pace > EASY_RUN_HARD_MINUTES:
+            fit = math.floor(EASY_RUN_HARD_MINUTES / pace * 10) / 10
+            notes.append(f"Shortened {x['day']} easy run from {x['distance_mi']} to {fit} mi ({EASY_RUN_HARD_MINUTES} minutes).")
+            x["distance_mi"] = fit
     # too many weekday sessions: drop recovery first, then the latest in the week
     wd = [x for x in kept if x["day"] not in s["weekend_days"]]
     while len(wd) > s["weekday_sessions_max"]:
-        drop = next((x for x in wd if not is_hard(x)), wd[-1])
+        strength = [x for x in kept if x["kind"] == "strength"]
+        drop = next((x for x in wd if x["kind"] == "recovery"), None) \
+            or (strength[-1] if len(strength) > 2 and strength[-1] in wd else None) \
+            or next((x for x in reversed(wd) if x["kind"] != "run"), None) or wd[-1]
         kept.remove(drop); wd.remove(drop)
         notes.append(f"Dropped {drop['day']} {drop['title']} to stay at {s['weekday_sessions_max']} weekday sessions.")
     # third straight hard day becomes recovery, earliest first (fixing one can fix the next)
@@ -294,10 +430,11 @@ def clamp(plan: dict, lim: dict, profile: dict, before: list[str] = ()) -> list[
         notes.append(f"Turned {d} ({kept[i]['title']}) into recovery to avoid three hard days in a row.")
         kept[i] = {**RECOVERY_SESSION, "day": d}
     plan["sessions"] = kept
+    longest = _longest_allowed(lim)
     for x in kept:
-        if x["kind"] == "run" and (x.get("distance_mi") or 0) > lim["max_long_run_mi"]:
-            notes.append(f"Shortened {x['day']} run from {x['distance_mi']} to {lim['max_long_run_mi']} mi.")
-            x["distance_mi"] = lim["max_long_run_mi"]
+        if x["kind"] == "run" and (x.get("distance_mi") or 0) > longest:
+            notes.append(f"Shortened {x['day']} run from {x['distance_mi']} to {longest} mi.")
+            x["distance_mi"] = longest
     for x in kept:
         if x["kind"] != "run" and x["day"] not in s["weekend_days"] and (x.get("minutes") or 0) > s["weekday_max_minutes"]:
             notes.append(f"Shortened {x['day']} {x['kind']} to {s['weekday_max_minutes']} minutes.")
@@ -332,6 +469,9 @@ def clamp(plan: dict, lim: dict, profile: dict, before: list[str] = ()) -> list[
             for x in runs:
                 x["distance_mi"] = max(round(x["distance_mi"] * f - 0.05, 1), 0.5)
         notes.append(f"Trimmed run distances to stay under {lim['max_weekly_miles']} mi this week.")
+    n_runs = sum(x["kind"] == "run" for x in kept)
+    if lim.get("runs_per_week") and n_runs < lim["runs_per_week"]:
+        notes.append(f"The plan has {n_runs} runs; the target is {lim['runs_per_week']}.")
     return notes
 
 
@@ -350,12 +490,23 @@ def build_context(conn, week_start: date) -> dict:
                       "unit": g["unit"], "target_date": g["target_date"], "status": line.get("status")})
     ls = lean_series(conn)
     prev = week_start - timedelta(days=7)
+    lim = limits(conn, profile, week_start)
+    prog = progression(conn, profile, week_start, lim)
+    earlier = []
+    for k in (2, 3, 4):   # runs from the weeks before last, so "two weeks running" can be judged
+        adh = adherence(conn, week_start - timedelta(days=7 * k))
+        if adh:
+            earlier.append({"week_start": adh["week_start"], "completed": adh["completed"],
+                            "runs": [{x: s.get(x) for x in ("day", "done", "planned_mi", "actual_mi", "planned_pace", "actual_pace")}
+                                     for s in adh["sessions"] if s["kind"] == "run"]})
     return {
         "planning_week": f"{week_start} to {week_start + timedelta(days=6)}",
-        "athlete": {k: v for k, v in profile.items() if k != "guardrails"},
-        "limits": limits(conn, profile, week_start),
+        "athlete": {k: v for k, v in profile.items() if k not in ("guardrails", "running")},
+        "limits": {**lim, "long_run_mi": prog["long_run_mi"], "runs_per_week": prog["runs_per_week"]},
+        "running_progression": {k: v for k, v in prog.items() if k != "recent_weeks"},
         "goals": goals,
         "last_week_adherence": adherence(conn, prev),
+        "earlier_weeks_runs": earlier,
         "last_4_weeks_activities": activities_between(conn, week_start - timedelta(days=28), week_start - timedelta(days=1)),
         "weekly_running": weekly_runs(run_series(conn))[-6:],
         "lean_mass_trend_weekly": [{"day": r["day"], "avg_lb": r["avg"]} for r in ls[::7][-8:]],
@@ -543,13 +694,13 @@ def notify(message: str) -> None:
                        capture_output=True, timeout=10)
 
 
-def save(conn, week_start: date, plan: dict, notes: list[str], model: str) -> None:
+def save(conn, week_start: date, plan: dict, notes: list[str], model: str, ladder_long_mi: float | None = None) -> None:
     ws = week_start.isoformat()
     conn.execute("DELETE FROM planned_sessions WHERE week_start=?", (ws,))
     conn.execute("DELETE FROM plan_summaries WHERE week_start=?", (ws,))  # a new plan gets a new summary
     conn.execute("INSERT OR REPLACE INTO coach_plans VALUES (?,?,?,?,?,?)",
                  (ws, datetime.now().isoformat(timespec="seconds"), plan["focus"],
-                  "\n".join(notes) or None, model, json.dumps(plan)))
+                  "\n".join(notes) or None, model, json.dumps({**plan, "ladder_long_mi": ladder_long_mi})))
     for x in plan["sessions"]:
         day = (week_start + timedelta(days=DAYS.index(x["day"]))).isoformat()
         conn.execute("INSERT OR REPLACE INTO planned_sessions VALUES (?,?,?,?,?,?,?,?,?,?)",
@@ -582,7 +733,7 @@ def main(argv: list[str]) -> None:
             except (RuntimeError, ValueError, TypeError, OSError, subprocess.SubprocessError) as e:
                 print(f"Revision failed ({e}); keeping the first plan and clamping it.")
     notes = vnotes + (clamp(plan, lim, profile, before) if check(plan, lim, profile, before) else [])
-    save(conn, week_start, plan, notes, model)
+    save(conn, week_start, plan, notes, model, lim.get("long_run_mi"))
     print(f"Plan saved for week of {week_start}: {len(plan['sessions'])} sessions.")
     for n in notes:
         print("  guardrail:", n)
