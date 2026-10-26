@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from db import HOME, connect
-from metrics import lean_series, load_goals, plan_line, run_series, treadmill_mph, weekly_activity, weekly_runs
+from metrics import MIN_LEAN_READINGS, lean_series, load_goals, plan_line, run_series, treadmill_mph, weekly_activity, weekly_runs
 
 OUT = HOME / "report.html"
 
@@ -261,8 +261,8 @@ def build(quiet: bool = False) -> Path:
 
     if g := goals.get("lean_mass_lb"):
         ls = lean_series(conn)
-        # wait for a week of readings before trusting the average enough to anchor the plan
-        p = plan_line(g, [(r["day"], r["avg"]) for r in ls if r["n"] >= 7])
+        # wait for enough weigh-ins (MIN_LEAN_READINGS in 14 days) that one odd reading can't set the start
+        p = plan_line(g, [(r["day"], r["avg"]) for r in ls if r["n"] >= MIN_LEAN_READINGS])
         data["muscle"] = {"series": ls, "plan": p,
                           "axis": _axis(g, [r["reading"] for r in ls] + [r["avg"] for r in ls], p)}
         extra = ""
@@ -270,7 +270,7 @@ def build(quiet: bool = False) -> Path:
             last = ls[-1]
             if last["weight"]:
                 extra = f'<p class="gap">Weight {last["weight"]} lb · lean mass {last["lean_pct"]}% of body weight</p>'
-        waiting = (f"Plan line starts after 7 readings in 14 days ({ls[-1]['n']} so far)" if ls
+        waiting = (f"Plan line starts after {MIN_LEAN_READINGS} readings in 14 days ({ls[-1]['n']} so far)" if ls
                    else "No readings yet")
         sections.append(_section("muscle", g, p, extra, waiting))
 

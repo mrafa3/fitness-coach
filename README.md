@@ -3,7 +3,7 @@
 A small local app that tracks two goals against a plan line and writes you a training plan every Sunday.
 
 - **Lean mass.** 14-day rolling average of the Eufy scale's lean body mass. The target is a gain set in `goals.toml`.
-- **6 miles in 60 minutes.** Every run of 1+ mile becomes a projected 6-mile time with Riegel's formula, `T2 = T1 × (6 / miles)^1.06`; the weekly best is the trend line.
+- **A 6-mile time** (the target is in `goals.toml`). Every run of 1+ mile becomes a projected 6-mile time with Riegel's formula, `T2 = T1 × (6 / miles)^1.06`; the weekly best is the trend line.
 
 ## How data flows
 

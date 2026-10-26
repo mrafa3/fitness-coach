@@ -41,6 +41,12 @@ def _d(s: str) -> date:
 
 # ---- body composition ------------------------------------------------------
 
+# The lean-mass plan line (and ahead/behind) starts once the 14-day average rests on at least
+# this many weigh-ins: enough that one odd reading can't set the starting point, few enough
+# for a two-or-three-times-a-week routine.
+MIN_LEAN_READINGS = 4
+
+
 def lean_series(conn, window: int = 14) -> list[dict]:
     """One point per day with a lean-mass reading, plus its trailing N-day average."""
     rows = conn.execute(

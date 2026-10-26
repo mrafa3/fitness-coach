@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from db import connect
-from metrics import (METERS_PER_MILE, MIN_WORKOUT_SECONDS, lean_series, load_goals, plan_line, run_series,
+from metrics import (METERS_PER_MILE, MIN_LEAN_READINGS, MIN_WORKOUT_SECONDS, lean_series, load_goals, plan_line, run_series,
                      treadmill_mph, weekly_runs)
 
 HERE = Path(__file__).parent
@@ -342,11 +342,11 @@ def build_context(conn, week_start: date) -> dict:
     goals = []
     for g in load_goals():
         if g["metric"] == "lean_mass_lb":
-            actual = [(r["day"], r["avg"]) for r in lean_series(conn) if r["n"] >= 7]
+            actual = [(r["day"], r["avg"]) for r in lean_series(conn) if r["n"] >= MIN_LEAN_READINGS]
         else:
             actual = [(w["week"], w["best_projected"]) for w in weekly_runs(run_series(conn))]
         line = plan_line(g, actual)
-        goals.append({"goal": g["name"], "target": line["end"][1] if line.get("start") else None,
+        goals.append({"goal": g["name"], "target": line["end"][1] if line.get("start") else g.get("target_value"),
                       "unit": g["unit"], "target_date": g["target_date"], "status": line.get("status")})
     ls = lean_series(conn)
     prev = week_start - timedelta(days=7)
