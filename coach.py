@@ -281,42 +281,60 @@ def _planned_long(conn, week_start: date) -> float | None:
     return row["mi"] if row else None
 
 
-def progression(conn, profile: dict, week_start: date, lim: dict) -> dict:
-    """This week's long run, from a simple ladder: hold a distance until two weeks in a row have every
-    planned run done, then step up. Missing runs two weeks running steps back. Capped by the limits."""
-    r = running_settings(profile)
-    step, goal = r["long_run_step_mi"], r["long_run_goal_mi"]
+def planned_weeks(conn, week_start: date, n: int = 4) -> list[dict]:
+    """The planned weeks before week_start, newest first, stopping at a week with no plan."""
     weeks = []
-    for k in range(1, 5):   # the last four planned weeks, newest first, stopping at a gap
+    for k in range(1, n + 1):
         ws = week_start - timedelta(days=7 * k)
         adh = adherence(conn, ws)
         if adh is None:
             break
         weeks.append({"week_start": ws.isoformat(), "runs_complete": _runs_complete(adh),
                       "planned_long_mi": _planned_long(conn, ws)})
-    consistent = 0
+    return weeks
+
+
+def consistent_weeks(weeks: list[dict]) -> int:
+    """How many of these weeks in a row (newest first) had every planned run done."""
+    n = 0
     for w in weeks:
         if w["runs_complete"] is not True:
             break
-        consistent += 1
+        n += 1
+    return n
+
+
+def ladder_step(weeks: list[dict], step: float) -> tuple[float, str]:
+    """The ladder rule, from the weeks before (newest first, the newest with a planned long run):
+    hold a distance until two weeks in a row have every run done, then step up; missed runs two
+    weeks running step back. Uncapped; progression() applies the limits."""
+    last = weeks[0]["planned_long_mi"]
+    prev = weeks[1] if len(weeks) > 1 else None
+    held = prev is not None and prev["planned_long_mi"] is not None and abs(prev["planned_long_mi"] - last) < 0.05
+    if weeks[0]["runs_complete"] is None:
+        return last, "Last week's runs can't be judged yet (still due, or none planned): hold."
+    if weeks[0]["runs_complete"] and prev and prev["runs_complete"] and held:
+        return last + step, f"Two weeks in a row with every run done at {last} mi: step up."
+    if weeks[0]["runs_complete"]:
+        return last, f"Last week's runs were all done; hold {last} mi a second week before stepping up."
+    if prev and prev["runs_complete"] is False:
+        return last - step, "Runs were missed two weeks running: step back."
+    return last, "Some runs were missed last week: hold."
+
+
+def progression(conn, profile: dict, week_start: date, lim: dict) -> dict:
+    """This week's long run, from a simple ladder: hold a distance until two weeks in a row have every
+    planned run done, then step up. Missing runs two weeks running steps back. Capped by the limits."""
+    r = running_settings(profile)
+    step, goal = r["long_run_step_mi"], r["long_run_goal_mi"]
+    weeks = planned_weeks(conn, week_start)
+    consistent = consistent_weeks(weeks)
     if not weeks or weeks[0]["planned_long_mi"] is None:
         recent = [w["longest_mi"] for w in weekly_runs(run_series(conn)) if w["week"] < week_start.isoformat()][-3:]
         suggested = round(max(recent), 1) if recent else lim["max_long_run_mi"] - 1.0
         why = "No planned long run last week; starting from your longest recent run."
     else:
-        last = weeks[0]["planned_long_mi"]
-        prev = weeks[1] if len(weeks) > 1 else None
-        held = prev is not None and prev["planned_long_mi"] is not None and abs(prev["planned_long_mi"] - last) < 0.05
-        if weeks[0]["runs_complete"] is None:
-            suggested, why = last, "Last week's runs can't be judged yet (still due, or none planned): hold."
-        elif weeks[0]["runs_complete"] and prev and prev["runs_complete"] and held:
-            suggested, why = last + step, f"Two weeks in a row with every run done at {last} mi: step up."
-        elif weeks[0]["runs_complete"]:
-            suggested, why = last, f"Last week's runs were all done; hold {last} mi a second week before stepping up."
-        elif prev and prev["runs_complete"] is False:
-            suggested, why = last - step, "Runs were missed two weeks running: step back."
-        else:
-            suggested, why = last, "Some runs were missed last week: hold."
+        suggested, why = ladder_step(weeks, step)
     capped = round(max(min(suggested, lim["max_long_run_mi"], goal), 1.0), 1)
     if capped < round(suggested, 1) - 0.05:
         why += f" Capped at {capped} mi by the weekly limits."

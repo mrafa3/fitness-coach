@@ -33,6 +33,7 @@ What the coach can see: workout type and length for everything, distance and pac
 | `coach.py` | Scores last week, asks Claude for next week, validates and enforces guardrails, saves the plan |
 | `calendar_ics.py` | Writes the plan to `training.ics` |
 | `report.py` | Builds `report.html` (charts bundled in `vendor/`, no network requests); the receiver serves it to your phone at home |
+| `outlook.py` | The card at the top of the report: this week's runs, and what finishing them means for next week (tempo unlock, long-run ladder), using the coach's own rules; plus your streak of planned sessions done |
 | `run_weekly.py` | The Sunday job: plan, calendar, report, then Google Calendar if connected |
 | `google_api.py`, `google_auth.py` | Google sign-in (browser + PKCE) and API calls, standard library only |
 | `gcal.py` | Keeps the Training calendar in your Google account in step with the plan |

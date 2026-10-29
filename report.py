@@ -40,6 +40,15 @@ PAGE = """<!doctype html>
   th, td { text-align:right; padding:7px 3px; white-space:nowrap; border-top:1px solid color-mix(in srgb, var(--muted) 25%, transparent); }
   th { color:var(--muted); font-weight:500; font-size:10px; border-top:0; }
   th:first-child, td:first-child { text-align:left; } .of { color:var(--muted); }
+  .num { display:flex; align-items:baseline; gap:8px; margin:2px 0 12px; }
+  .num b { font-size:46px; font-weight:600; line-height:1.05; } .num span { font-size:18px; color:var(--muted); }
+  .chips { display:flex; gap:6px; margin-bottom:12px; }
+  .chip { flex:1; text-align:center; font-size:12px; padding:6px 2px; border-radius:8px; color:var(--muted);
+          border:1px solid color-mix(in srgb, var(--muted) 40%, transparent); }
+  .chip.done { color:var(--line); border-color:transparent; background:color-mix(in srgb, var(--line) 14%, transparent); }
+  .chip.missed, .chip.short { color:var(--plan); border-color:transparent; background:color-mix(in srgb, var(--plan) 16%, transparent); }
+  .stakes { border-top:1px solid color-mix(in srgb, var(--muted) 25%, transparent); padding-top:10px; display:grid; gap:5px; }
+  .stakes .ok { color:var(--line); } .stakes .lost { color:var(--plan); } .stakes .small { font-size:13px; color:var(--muted); }
 </style></head><body><main>
 <h1>Fitness Coach</h1><p class="sub">Updated __UPDATED__</p>
 __FRESHNESS__
@@ -144,6 +153,34 @@ def _shown_week(conn):
         if conn.execute("SELECT 1 FROM coach_plans WHERE week_start=?", (ws.isoformat(),)).fetchone():
             return ws
     return this_monday
+
+
+def _outlook_section(conn) -> str:
+    """The card at the top: this week's runs, and what finishing them means for next week."""
+    from datetime import date
+    from outlook import week_outlook
+    ws = _shown_week(conn)
+    o = week_outlook(conn, ws)
+    if not o:
+        return ""
+    today = date.today()
+    title = "This week's runs" if ws <= today else "Next week's runs"
+    chips = []
+    for r in o["runs"]:
+        d = f"{date.fromisoformat(r['day']):%a}"
+        label = {"done": f"✓ {d} {r['mi']}", "missed": f"{d} missed",
+                 "short": f"{d} {r['actual_mi']} of {r['mi']}"}.get(r["status"], f"{d} {r['mi']}")
+        if r["long"] and r["status"] in ("pending", "done"):
+            label += " long"
+        chips.append(f'<span class="chip {r["status"]}">{html.escape(label)}</span>')
+    lines = [f'<span class="{"lost" if o["failed"] else "ok"}">{html.escape(o["unlock"])}</span>']
+    if o["long_run"]:
+        lines.append(f'<span>{html.escape(o["long_run"])}</span>')
+    lines.append(f'<span class="small">{o["streak"]} session{"" if o["streak"] == 1 else "s"} in a row'
+                 f' · best {o["best"]}</span>')
+    return (f'<section><span class="gap">{title}</span>'
+            f'<div class="num"><b>{o["done"]}</b><span>of {o["total"]}</span></div>'
+            f'<div class="chips">{"".join(chips)}</div><div class="stakes">{"".join(lines)}</div></section>')
 
 
 def _plan_section(conn) -> str:
@@ -257,7 +294,7 @@ def _freshness(conn) -> str:
 def build(quiet: bool = False) -> Path:
     conn = connect()
     goals = {g["metric"]: g for g in load_goals()}
-    data, sections = {}, [_plan_section(conn), _past_weeks(conn)]
+    data, sections = {}, [_outlook_section(conn), _plan_section(conn), _past_weeks(conn)]
 
     if g := goals.get("lean_mass_lb"):
         ls = lean_series(conn)
