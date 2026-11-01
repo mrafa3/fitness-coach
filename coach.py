@@ -712,13 +712,14 @@ def notify(message: str) -> None:
                        capture_output=True, timeout=10)
 
 
-def save(conn, week_start: date, plan: dict, notes: list[str], model: str, ladder_long_mi: float | None = None) -> None:
+def save(conn, week_start: date, plan: dict, notes: list[str], model: str, ladder_long_mi: float | None = None,
+         quality_unlocked: bool | None = None) -> None:
     ws = week_start.isoformat()
     conn.execute("DELETE FROM planned_sessions WHERE week_start=?", (ws,))
     conn.execute("DELETE FROM plan_summaries WHERE week_start=?", (ws,))  # a new plan gets a new summary
     conn.execute("INSERT OR REPLACE INTO coach_plans VALUES (?,?,?,?,?,?)",
                  (ws, datetime.now().isoformat(timespec="seconds"), plan["focus"],
-                  "\n".join(notes) or None, model, json.dumps({**plan, "ladder_long_mi": ladder_long_mi})))
+                  "\n".join(notes) or None, model, json.dumps({**plan, "ladder_long_mi": ladder_long_mi, "quality_unlocked": quality_unlocked})))
     for x in plan["sessions"]:
         day = (week_start + timedelta(days=DAYS.index(x["day"]))).isoformat()
         conn.execute("INSERT OR REPLACE INTO planned_sessions VALUES (?,?,?,?,?,?,?,?,?,?)",
@@ -751,7 +752,7 @@ def main(argv: list[str]) -> None:
             except (RuntimeError, ValueError, TypeError, OSError, subprocess.SubprocessError) as e:
                 print(f"Revision failed ({e}); keeping the first plan and clamping it.")
     notes = vnotes + (clamp(plan, lim, profile, before) if check(plan, lim, profile, before) else [])
-    save(conn, week_start, plan, notes, model, lim.get("long_run_mi"))
+    save(conn, week_start, plan, notes, model, lim.get("long_run_mi"), context["running_progression"]["quality_unlocked"])
     print(f"Plan saved for week of {week_start}: {len(plan['sessions'])} sessions.")
     for n in notes:
         print("  guardrail:", n)
