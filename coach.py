@@ -113,9 +113,15 @@ def workout_history(conn, week_start: date, days: int = 120) -> list[dict]:
 EASY_RUN_HARD_MINUTES = 30   # an easy run longer than this counts as a hard day (same as recent_hard_days)
 
 
+LIGHT_STRENGTH = ("upper", "core")   # strength that spares the legs: not a hard day
+
+
 def is_hard(session: dict) -> bool:
-    """Recovery sessions, recovery jogs and short easy runs don't count toward the three-in-a-row rule."""
+    """Recovery sessions, recovery jogs, short easy runs, and upper-body or core strength don't
+    count toward the three-in-a-row rule."""
     if session["kind"] == "recovery" or session.get("run_type") == "recovery":
+        return False
+    if session["kind"] == "strength" and session.get("body_focus") in LIGHT_STRENGTH:
         return False
     if session["kind"] == "run" and session.get("run_type") == "easy":
         mi, pace = session.get("distance_mi"), session.get("target_pace_min_mi")
@@ -140,10 +146,17 @@ def recent_hard_days(conn, week_start: date) -> list[str]:
     for k in (2, 1):
         d = week_start - timedelta(days=k)
         acts = activities_between(conn, d, d)
-        recorded = any(a["kind"] == "strength" or (a["kind"] == "run" and a["minutes"] > 30) for a in acts)
+        planned = conn.execute("SELECT kind, run_type, distance_mi, target_pace, body_focus FROM planned_sessions "
+                               "WHERE day=?", (d.isoformat(),)).fetchall()
+        # Apple Health can't tell an upper-body workout from a leg day, so a strength workout is
+        # light only when that day's plan was upper or core; an unplanned one counts as hard
+        light_day = any(r["kind"] == "strength" and r["body_focus"] in LIGHT_STRENGTH for r in planned)
+        recorded = any((a["kind"] == "strength" and not light_day) or (a["kind"] == "run" and a["minutes"] > 30)
+                       for a in acts)
         # a weekend session may not have synced from the phone yet; trust the plan for that day
-        planned = conn.execute("SELECT kind, run_type FROM planned_sessions WHERE day=?", (d.isoformat(),)).fetchall()
-        planned_hard = any(is_hard({"kind": r["kind"], "run_type": r["run_type"]}) for r in planned)
+        planned_hard = any(is_hard({"kind": r["kind"], "run_type": r["run_type"], "distance_mi": r["distance_mi"],
+                                    "target_pace_min_mi": r["target_pace"], "body_focus": r["body_focus"]})
+                           for r in planned)
         if recorded or planned_hard:
             out.append(DAYS[d.weekday()])
     return out
@@ -236,6 +249,12 @@ def limits(conn, profile: dict, week_start: date) -> dict:
 
 RUNNING_DEFAULTS = {"runs_per_week": 3, "long_run_goal_mi": 6.0, "long_run_goal_date": "2027-03-01",
                     "long_run_step_mi": 0.5}
+
+
+def strength_per_week(profile: dict) -> int:
+    """[strength] sessions_per_week in coach.toml (1-5), default 3."""
+    v = (profile.get("strength") or {}).get("sessions_per_week") if isinstance(profile.get("strength"), dict) else None
+    return int(v) if isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 5 else 3
 
 
 def running_settings(profile: dict) -> dict:
@@ -376,7 +395,7 @@ def check(plan: dict, lim: dict, profile: dict, before: list[str] = ()) -> list[
     if len(weekdays) > s["weekday_sessions_max"]:
         problems.append(f"{len(weekdays)} weekday sessions; the limit is {s['weekday_sessions_max']}.")
     for d in _streak_violations(sessions, list(before)):
-        problems.append(f"{d} would be a third straight hard day; make it recovery (stretching, yoga, or a light jog).")
+        problems.append(f"{d} would be a third straight hard day; make it recovery, a short easy run, or upper-body or core strength.")
     for x in sessions:
         if x["kind"] != "run" and x["day"] not in s["weekend_days"] and (x.get("minutes") or 0) > s["weekday_max_minutes"]:
             problems.append(f"{x['day']} {x['kind']} is {x['minutes']} min; weekdays are capped at {s['weekday_max_minutes']}.")
@@ -384,6 +403,10 @@ def check(plan: dict, lim: dict, profile: dict, before: list[str] = ()) -> list[
     if lim.get("runs_per_week") and len(runs) < lim["runs_per_week"]:
         problems.append(f"{len(runs)} runs planned; schedule {lim['runs_per_week']} (one long, the others easy "
                         "unless quality is unlocked).")
+    n_strength = sum(x["kind"] == "strength" for x in sessions)
+    if lim.get("strength_per_week") and n_strength < lim["strength_per_week"]:
+        problems.append(f"{n_strength} strength sessions planned; schedule {lim['strength_per_week']} "
+                        "(upper-body and core days aren't hard days).")
     total = sum(x.get("distance_mi") or 0 for x in runs)
     if total > lim["max_weekly_miles"]:
         problems.append(f"Weekly run miles {total:.1f} exceed limit {lim['max_weekly_miles']}.")
@@ -428,7 +451,7 @@ def clamp(plan: dict, lim: dict, profile: dict, before: list[str] = ()) -> list[
     while len(wd) > s["weekday_sessions_max"]:
         strength = [x for x in kept if x["kind"] == "strength"]
         drop = next((x for x in wd if x["kind"] == "recovery"), None) \
-            or (strength[-1] if len(strength) > 2 and strength[-1] in wd else None) \
+            or (strength[-1] if len(strength) > (lim.get("strength_per_week") or 2) and strength[-1] in wd else None) \
             or next((x for x in reversed(wd) if x["kind"] != "run"), None) or wd[-1]
         kept.remove(drop); wd.remove(drop)
         notes.append(f"Dropped {drop['day']} {drop['title']} to stay at {s['weekday_sessions_max']} weekday sessions.")
@@ -490,6 +513,9 @@ def clamp(plan: dict, lim: dict, profile: dict, before: list[str] = ()) -> list[
     n_runs = sum(x["kind"] == "run" for x in kept)
     if lim.get("runs_per_week") and n_runs < lim["runs_per_week"]:
         notes.append(f"The plan has {n_runs} runs; the target is {lim['runs_per_week']}.")
+    n_strength = sum(x["kind"] == "strength" for x in kept)
+    if lim.get("strength_per_week") and n_strength < lim["strength_per_week"]:
+        notes.append(f"The plan has {n_strength} strength sessions; the target is {lim['strength_per_week']}.")
     return notes
 
 
@@ -519,8 +545,9 @@ def build_context(conn, week_start: date) -> dict:
                                      for s in adh["sessions"] if s["kind"] == "run"]})
     return {
         "planning_week": f"{week_start} to {week_start + timedelta(days=6)}",
-        "athlete": {k: v for k, v in profile.items() if k not in ("guardrails", "running")},
-        "limits": {**lim, "long_run_mi": prog["long_run_mi"], "runs_per_week": prog["runs_per_week"]},
+        "athlete": {k: v for k, v in profile.items() if k not in ("guardrails", "running", "strength")},
+        "limits": {**lim, "long_run_mi": prog["long_run_mi"], "runs_per_week": prog["runs_per_week"],
+                   "strength_per_week": strength_per_week(profile)},
         "running_progression": {k: v for k, v in prog.items() if k != "recent_weeks"},
         "goals": goals,
         "last_week_adherence": adherence(conn, prev),

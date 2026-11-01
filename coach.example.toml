@@ -5,8 +5,8 @@
 [schedule]
 weekday_time         = "06:00"     # weekday mornings
 weekend_time         = "10:00"     # Sat and Sun
-weekday_sessions_target = 3        # aim for this many weekday mornings
-weekday_sessions_max    = 4        # never schedule more than this
+weekday_sessions_target = 4        # aim for this many weekday mornings (3 runs + 3 strength needs 4)
+weekday_sessions_max    = 5        # never more than this; the 5th is for a short recovery session
 weekday_max_minutes     = 45
 weekend_days         = ["Sat", "Sun"]
 timezone             = "America/New_York"   # yours, e.g. America/Chicago
@@ -27,6 +27,9 @@ runs_per_week      = 3
 long_run_goal_mi   = 6.0
 long_run_goal_date = "2027-03-01"   # reach this long run by this date
 long_run_step_mi   = 0.5            # added after two weeks in a row with every run done
+
+[strength]
+sessions_per_week  = 3              # upper-body and core sessions aren't hard days
 
 [guardrails]
 max_weekly_mileage_increase = 0.10   # vs your biggest week in the last 3
